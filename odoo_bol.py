@@ -7,13 +7,20 @@ Odoo BOL (Bill of Lading) Validation Module
 
 import requests
 import logging
+import logging.handlers
 import base64
 import gzip
 import os
 from datetime import datetime
 from io import BytesIO
 
-logger = logging.getLogger("odoo_bol")
+logger = logging.getLogger('odoo_bol')
+logger.setLevel(logging.INFO)
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(_log_dir, exist_ok=True)
+_fh = logging.handlers.RotatingFileHandler(os.path.join(_log_dir, 'odoo_bol.log'), maxBytes=10*1024*1024, backupCount=5)
+_fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+logger.addHandler(_fh)
 
 # ============================================
 # ODOO CONFIGURATION
@@ -210,7 +217,7 @@ def _send_failure_email(customer_po, reasons, order_name=""):
     <h3>Reasons</h3><ul>{reasons_html}</ul>
     <p style="color:#666;"><em>Manual intervention required.</em></p>
     </body></html>"""
-    send_email_notification("sam.kwon@innofoods.ca,it@innofoods.ca", subject, html, cc_email="sam.kwon@innofoods.ca")
+    send_email_notification("sam.kwon@innofoods.ca,logistics@innofoods.ca,it@innofoods.ca", subject, html, cc_email="")
 
 
 def _send_success_email(result, customer_po, order_name, picking_name):
@@ -225,7 +232,7 @@ def _send_success_email(result, customer_po, order_name, picking_name):
     <tr><td style="border:1px solid #ddd;padding:8px;"><strong>Picking</strong></td><td style="border:1px solid #ddd;padding:8px;">{picking_name}</td></tr></table>
     <h3>Items</h3><table style="border-collapse:collapse;width:100%;"><tr style="background:#f2f2f2;"><th style="border:1px solid #ddd;padding:8px;">SKU</th><th style="border:1px solid #ddd;padding:8px;">Lot</th><th style="border:1px solid #ddd;padding:8px;">Qty</th><th style="border:1px solid #ddd;padding:8px;">Status</th></tr>{items_html}</table>
     </body></html>"""
-    send_email_notification("sam.kwon@innofoods.ca", f"BOL Update Successful - {customer_po} ({order_name})", html, cc_email="it@innofoods.ca")
+    send_email_notification("sam.kwon@innofoods.ca,logistics@innofoods.ca,it@innofoods.ca", f"BOL Update Successful - {customer_po} ({order_name})", html, cc_email="")
 
 
 # ============================================
@@ -264,7 +271,7 @@ def update_bol(customer_po, items=None, time_out="", ship_date=""):
                 from zoneinfo import ZoneInfo
             except ImportError:
                 from backports.zoneinfo import ZoneInfo
-            local_dt = parsed.replace(tzinfo=ZoneInfo("America/Vancouver"))
+            local_dt = parsed.replace(hour=14, minute=0, second=0, tzinfo=ZoneInfo("America/Vancouver")) if parsed.hour == 0 and parsed.minute == 0 else parsed.replace(tzinfo=ZoneInfo("America/Vancouver"))
             utc_dt = local_dt.astimezone(ZoneInfo("UTC"))
             odoo_datetime = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
             result["time_out_display"] = date_str

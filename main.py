@@ -10,8 +10,21 @@ import time
 import sqlite3
 from bs4 import BeautifulSoup
 from odoo_bol import update_bol as odoo_update_bol
+import logging
+from logging.handlers import RotatingFileHandler
 
 app = FastAPI(title="Lagrou Order Scraper + BOL Validation API")
+
+# ─── Logging ──────────────────────────────────────────
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logger = logging.getLogger('ragro')
+logger.setLevel(logging.INFO)
+fh = RotatingFileHandler(os.path.join(LOG_DIR, 'ragro.log'), maxBytes=10*1024*1024, backupCount=5)
+fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+logger.addHandler(fh)
+logger.info('=== Ragro Service Started ===')
 
 BASE_URL = "https://customers.lagrou.com"
 CREDENTIALS = {
@@ -190,6 +203,7 @@ def login() -> requests.Session:
     session.post(f"{BASE_URL}/updcokcloseorder.asp?passdate=1/1/2000", data={"chgsort": "shipdt"})
 
     _cached_session = session
+    logger.info("Lagrou login successful")
     return session
 
 
@@ -235,6 +249,7 @@ def fetch_new_orders(session: requests.Session, passdate: str, stop_after: int =
 
     # DB 저장용으로 전체 목록도 저장
     save_orders_to_db(all_orders)
+    logger.info(f"Synced {len(all_orders)} orders from {passdate} to DB")
 
     return new_orders, skipped, len(all_orders)
 
@@ -319,7 +334,7 @@ def api_root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy", "service": "lagrou-bol-service", "port": 8000}
+    return {"status": "healthy", "service": "lagrou-bol-service", "port": 8200}
 
 
 @app.post("/update-bol")
@@ -392,6 +407,7 @@ def data_orders():
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <title>InnoFoods - Lagrou Warehouse</title>
 <style>
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -405,7 +421,7 @@ def data_orders():
         align-items: center;
         justify-content: space-between;
         box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-    }}
+        }}
     .header-left {{ display: flex; align-items: center; gap: 20px; }}
     .header img {{ height: 45px; }}
     .header h1 {{ color: #fff; font-size: 20px; font-weight: 400; }}
@@ -417,7 +433,8 @@ def data_orders():
     .stats {{
         display: flex;
         gap: 20px;
-        padding: 25px 40px;
+        padding: 15px 40px;
+        
         flex-wrap: wrap;
     }}
     .stat-card {{
@@ -442,7 +459,7 @@ def data_orders():
         justify-content: space-between;
         align-items: center;
         margin-bottom: 15px;
-    }}
+        }}
     .toolbar h2 {{ font-size: 18px; color: #1a1a2e; }}
 
     /* Buttons */
@@ -473,11 +490,13 @@ def data_orders():
     .table-wrap {{
         background: white;
         border-radius: 12px;
-        overflow: hidden;
+        overflow: auto;
+        max-height: 60vh;
         box-shadow: 0 1px 6px rgba(0,0,0,0.06);
     }}
     table {{ width: 100%; border-collapse: collapse; }}
     thead th {{
+        position: sticky; top: 0; z-index: 10;
         background: #1a1a2e;
         color: #ccc;
         padding: 14px 15px;
@@ -537,6 +556,14 @@ def data_orders():
         transition: border 0.2s;
     }}
     .search-box:focus {{ border-color: #3498db; }}
+
+    /* Pagination */
+    .pagination {{ margin-top: 15px; display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap; }}
+    .pagination a {{ display: inline-flex; align-items: center; justify-content: center; min-width: 36px; height: 36px; padding: 0 10px; background: white; border: 1px solid #ddd; border-radius: 6px; color: #333; text-decoration: none; font-size: 13px; cursor: pointer; transition: all 0.2s; }}
+    .pagination a:hover {{ background: #e74c3c; color: white; border-color: #e74c3c; }}
+    .pagination a.active {{ background: #1a1a2e; color: white; border-color: #1a1a2e; }}
+    .pagination .dots {{ color: #888; padding: 0 4px; }}
+    .pagination .page-info {{ color: #888; font-size: 12px; margin-left: 10px; }}
 </style>
 </head><body>
 
@@ -587,14 +614,77 @@ def data_orders():
     </div>
 </div>
 
+<div class="pagination" id="pagination"></div>
+
 <script>
+const PAGE_SIZE = 20;
+let currentPage = 1;
+let allRows = [];
+let filteredRows = [];
+
+function init() {{
+    const tbody = document.getElementById('orderBody');
+    allRows = Array.from(tbody.getElementsByTagName('tr'));
+    filteredRows = [...allRows];
+    const p = parseInt(new URLSearchParams(location.search).get('page'));
+    showPage(p > 0 ? p : 1);
+}}
+
+function showPage(page) {{
+    currentPage = page;
+    const url = new URL(location);
+    url.searchParams.set('page', page);
+    url.hash = '';
+    history.replaceState(null, '', url);
+    const start = (page - 1) * PAGE_SIZE;
+    const end = start + PAGE_SIZE;
+
+    allRows.forEach(r => r.style.display = 'none');
+    filteredRows.slice(start, end).forEach(r => r.style.display = '');
+
+    renderPagination();
+}}
+
+function renderPagination() {{
+    const totalPages = Math.ceil(filteredRows.length / PAGE_SIZE);
+    const el = document.getElementById('pagination');
+    if (totalPages <= 1) {{ el.innerHTML = ''; return; }}
+
+    let html = '';
+    if (currentPage > 1) html += '<a onclick="showPage(' + (currentPage-1) + ')">&laquo; Prev</a>';
+
+    const startP = Math.max(1, currentPage - 3);
+    const endP = Math.min(totalPages, currentPage + 3);
+
+    if (startP > 1) html += '<a onclick="showPage(1)">1</a><span class="dots">...</span>';
+    for (let i = startP; i <= endP; i++) {{
+        html += '<a onclick="showPage(' + i + ')"' + (i === currentPage ? ' class="active"' : '') + '>' + i + '</a>';
+    }}
+    if (endP < totalPages) html += '<span class="dots">...</span><a onclick="showPage(' + totalPages + ')">' + totalPages + '</a>';
+
+    if (currentPage < totalPages) html += '<a onclick="showPage(' + (currentPage+1) + ')">Next &raquo;</a>';
+
+    html += '<span class="page-info">(' + filteredRows.length + ' total)</span>';
+    el.innerHTML = html;
+}}
+
 function filterTable() {{
     const q = document.getElementById('search').value.toLowerCase();
-    const rows = document.getElementById('orderBody').getElementsByTagName('tr');
-    for (let r of rows) {{
-        r.style.display = r.textContent.toLowerCase().includes(q) ? '' : 'none';
+    if (q === '') {{
+        filteredRows = [...allRows];
+    }} else {{
+        filteredRows = allRows.filter(r => r.textContent.toLowerCase().includes(q));
     }}
+    showPage(1);
 }}
+
+init();
+
+window.addEventListener("pageshow", function(evt) {{
+    if (evt.persisted || (window.performance && window.performance.getEntriesByType("navigation")[0].type === "back_forward")) {{
+        location.reload();
+    }}
+}});
 </script>
 </body></html>"""
 
@@ -737,6 +827,7 @@ def sync_orders_stream():
                     yield f"data: {json.dumps({'type': 'fetch', 'bl': bl})}\n\n"
                     detail = fetch_bill_detail(session, bl)
                     save_bill_detail_to_db(detail)
+                    logger.info(f"Crawled BL {bl}: {detail.get('total_lines')} items, {detail.get('total_weight')} lbs")
 
                     # Odoo 업데이트
                     odoo_items = [{"item": it["item"], "lot_number": it["lot_number"], "quantity": it["quantity"]} for it in detail.get("items", [])]
@@ -753,6 +844,7 @@ def sync_orders_stream():
                         odoo_detail_str = "OK"
 
                     mark_processed(bl, odoo_status=odoo_ok, odoo_order=odoo_order, odoo_detail=odoo_detail_str)
+                    logger.info(f"Odoo update BL {bl}: {odoo_ok} | {odoo_order} | {odoo_detail_str}")
                     new_count += 1
 
                     yield f"data: {json.dumps({'type': 'done', 'bl': bl, 'items': detail['total_lines'], 'weight': detail['total_weight'], 'odoo': odoo_ok, 'odoo_order': odoo_order})}\n\n"
@@ -771,7 +863,7 @@ def sync_orders_stream():
 def view_bill_detail(bl: str):
     """특정 BL 상세 — DB에 있으면 바로, 없으면 크롤링"""
     detail = get_bill_detail_from_db(bl)
-    if not detail:
+    if not detail or not detail.get("items"):
         session = login()
         time.sleep(2)
         detail = fetch_bill_detail(session, bl)
@@ -819,7 +911,7 @@ def view_bill_detail(bl: str):
 </style>
 </head><body>
 <div class="card">
-    <a class="back" href="/">← 주문 목록으로</a>
+    <a class="back" href="javascript:history.back()">← 주문 목록으로</a>
     <h2>Bill of Lading #{detail['bill_of_lading']}</h2>
     <div class="status-row">Odoo 상태: {status_html}</div>
     <div class="field"><span class="label">Order Number:</span> {detail['order_number']}</div>
@@ -854,6 +946,7 @@ async function sendToOdoo() {{
         if (data.odoo_status === 'success') {{
             res.className = 'odoo-result ok';
             res.innerHTML = '<b>성공!</b> ' + (data.odoo_order || '') + ' — ' + (data.odoo_detail || '');
+
         }} else {{
             res.className = 'odoo-result fail';
             res.innerHTML = '<b>실패:</b> ' + (data.odoo_detail || data.error || 'Unknown error');
@@ -876,7 +969,7 @@ async function sendToOdoo() {{
 def send_bill_to_odoo(bl: str):
     """개별 BL을 Odoo로 전송"""
     detail = get_bill_detail_from_db(bl)
-    if not detail:
+    if not detail or not detail.get("items"):
         session = login()
         time.sleep(2)
         detail = fetch_bill_detail(session, bl)
@@ -897,6 +990,7 @@ def send_bill_to_odoo(bl: str):
         odoo_detail_str = "OK"
 
     mark_processed(bl, odoo_status=odoo_ok, odoo_order=odoo_order, odoo_detail=odoo_detail_str)
+    logger.info(f"Manual Odoo send BL {bl}: {odoo_ok} | {odoo_order} | {odoo_detail_str}")
 
     return JSONResponse({"bl": bl, "odoo_status": odoo_ok, "odoo_order": odoo_order, "odoo_detail": odoo_detail_str})
 
@@ -1028,4 +1122,4 @@ async def db_query(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8200)
