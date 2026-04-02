@@ -1,0 +1,9 @@
+.env
+*.db
+*.pyc
+__pycache__/
+lagrou_credentials.txt
+bill_details.json
+lagrou_shipped_orders_*.csv
+logs/
+venv/

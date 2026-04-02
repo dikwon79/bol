@@ -1,0 +1,14 @@
+[Unit]
+Description=Lagrou Order Scraper API
+After=network.target
+
+[Service]
+Type=simple
+User=sam
+WorkingDirectory=/home/sam/work/ragro
+ExecStart=/usr/bin/python3 /home/sam/work/ragro/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
